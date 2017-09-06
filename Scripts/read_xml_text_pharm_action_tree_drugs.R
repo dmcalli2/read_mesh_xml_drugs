@@ -8,6 +8,10 @@ library(stringr)
 ## All of the descriptorui's from the pharma table are in the subst_code table
 ## The converse is not true.
 
+## functions
+nrowreturn <- function(x) {
+  print(nrow(x))
+  x}
 
 ## File names
 # Record Type	Full File	Size	ZIP file	Size	GZ file	Size
@@ -154,118 +158,142 @@ rm(substance)
 
 ## Load terms required from rxnorm and eutils searching
 my_terms <- readRDS("../../Fellowship/Trial_identify/clinical_trials_august_2017/Data/Automatic_atc_rxnorm_mesh.Rds")
+my_terms <- my_terms %>%
+  filter(!is.na(MSH))
+
 srch <- my_terms %>% 
   select(MSH) %>% 
-  na.omit() %>% 
+  filter(!is.na(MSH)) %>% 
+  mutate(rec_type = str_sub(MSH, 1, 1)) %>% 
   distinct() # 719 records
 
-## Search in main database, supplemental records and substances with pharmacological action database
-inpharm <- intersect(srch$MSH, pharm$descriptorui) # 397
-inscr1 <- intersect(srch$MSH,  scr$supplementalrecordui) # 288
-inscr2 <- intersect(srch$MSH, scr$headingmappedto) # 288
-inscr_both <- union(inscr1, inscr2) ## 576
-inscr_inpharm <- union(inscr_both, inpharm) ## 700
-## Identify number of codes with one of 540 pharmacolgical action classes
-insub1 <- intersect(srch$MSH, substance$descriptorui) # 3
-insub2 <- intersect(srch$MSH, substance$recordui) # 630
-insub_both <- union(insub1, insub2) # 633
-
-## Identify number of pharmacological action codes which are in pharm
-inpharmsub1 <- intersect(substance$descriptorui, pharm$descriptorui) # 2
-inpharmsub2 <- intersect(substance$recordui,     pharm$descriptorui) # 2605
-inpharmsub3 <- intersect(substance$descriptorui, pharm$pharmui) # 422
-inpharmsub4 <- intersect(substance$recordui,     pharm$pharmui) # 2605
-inpharmsub <- reduce(list(inpharmsub1, inpharmsub2, inpharmsub3, inpharmsub4), union) # 3027
-check <- union(inpharmsub2, inpharmsub4) # 2605
-
-
-## Link scr data to srch
-scr_noasterisk <- scr %>% 
-  mutate(headingmappedto = str_replace_all(headingmappedto, ("^\\*"), ""))
-
-## Note all are distinct
-srch2 <- srch %>% 
-  left_join(scr_noasterisk, by = c("MSH" = "headingmappedto")) %>% 
-  left_join(scr_noasterisk, by = c("MSH" = "supplementalrecordui")) %>% 
-  gather(key = "scr", value = "scr_id", - MSH, na.rm = TRUE) 
-
-## Link substance data to srch
-substance2 <- substance %>% 
-  select(substance_descriptorui = descriptorui,
-         substance_recordui = recordui)
-
-srch3 <- srch2 %>% 
-  left_join(substance2, by = c("MSH" = "substance_recordui")) %>% 
-  left_join(substance2, by = c("scr_id" = "substance_recordui")) %>% 
-  gather(key = "substance_type", value = "substance_descriptorui", substance_descriptorui.x,
-         substance_descriptorui.y, na.rm = TRUE) %>% 
-  select(-substance_type) %>% 
-  distinct()
-
-# gather srch3 to make merge easier
-srch3b <- srch3 %>%
-  select(-scr) %>% 
-  gather(key = "code_type", "ui", -MSH, na.rm = TRUE) %>% 
-  distinct(MSH, ui, .keep_all = TRUE)
-
-## Link pharm data to search
-# Note zero overlap between pharmui and descriptorui
-intersect(pharm$pharmui, pharm$descriptorui)
-
-pharm_codes <- pharm %>% 
-  select(descriptorui, pharmui, tree_num )
-nrowreturn <- function(x) {
-  print(nrow(x))
-  x}
-pharmcodeonly <- pharm %>% 
-  select(pharmui, pharmstring) %>% 
-  distinct()
-treecodeonly <- pharm %>% 
-  select(descriptorui, tree) %>% 
-  distinct()
-
-srch4 <- srch3b %>%
-  left_join(pharm_codes, by = c("MSH" = "descriptorui")) %>% 
+## Identify tree number for specific MESH IDs
+## Direct join for D-codes (all drug codes)
+my_tree_d <- srch %>% 
+  filter(rec_type == "D") %>% 
   nrowreturn() %>% 
-  left_join(pharm_codes, by = c("MSH" = "pharmui")) %>% 
+  inner_join(tree, by = c("MSH" = "descriptorui"))
+
+## ConceptID related join
+my_tree_c <- srch %>% 
+  filter(rec_type == "C") %>% 
   nrowreturn() %>% 
-  left_join(pharm_codes, by = c("ui" = "descriptorui")) %>% 
+  inner_join(scr,  by = c("MSH" = "supplementalrecordui")) %>% 
   nrowreturn() %>% 
-  left_join(pharm_codes, by = c("ui" = "pharmui")) %>% 
+  inner_join(tree, by = "descriptorui") %>% 
   nrowreturn()
-map(srch4, ~ all(is.na(.x)))
 
-pharm_lkp <- srch4 %>% 
-  select(MSH, pharmui.x, pharmui.y) %>% 
-  gather(key = "pharm_codes", value = "pharmui", -MSH, na.rm = TRUE) %>% 
-  select(-pharm_codes) %>% 
+## Check if have a tree for all MSH codes
+my_tree <- bind_rows(my_tree_c, my_tree_d)
+setdiff(my_terms$MSH, my_tree$MSH) # one missing only C063008, not found on eutils either
+
+
+#### Find pharmacological action for all drugs
+my_pa_direct1 <-  srch %>% 
+  filter(MSH %in% subst_code$descriptorui_pharm_action540) %>% 
+  mutate(descriptorui_pharm_action540 = MSH)
+
+my_pa_direct2 <-  srch %>% 
+  inner_join(subst_code, by = c("MSH" = "descriptorui")) 
+my_pa_direct <- bind_rows(my_pa_direct1, my_pa_direct2)
+
+setdiff(my_terms$MSH, my_pa_direct$MSH)
+
+my_pa_indirect_c <- srch %>% 
+  anti_join(my_pa_direct, by = "MSH") %>% 
+  nrowreturn() %>% 
+  filter(rec_type == "C") %>% 
+  nrowreturn() %>% 
+  inner_join(scr, by = c("MSH" = "supplementalrecordui")) %>%
+  nrowreturn() %>% 
+  inner_join(subst_code, by = "descriptorui") %>% 
+  nrowreturn() 
+
+my_pa_indirect_d <- srch %>% 
+  anti_join(my_pa_direct, by = "MSH") %>% 
+  nrowreturn()%>% 
+  filter(rec_type == "D") %>% 
+  nrowreturn() %>% 
+  inner_join(scr, by = c("MSH" = "descriptorui")) %>% 
+  inner_join(scr, by = "supplementalrecordui") %>% 
+  inner_join(subst_code, by = "descriptorui")
+
+my_pa_all <- bind_rows(my_pa_direct, my_pa_indirect_c, my_pa_indirect_d)
+no_pa <- my_terms %>% 
+  anti_join(my_pa_all) %>% 
+  distinct(MSH, .keep_all = TRUE)
+
+## Return strings for no PAs
+# 41 MESH terms with no PAs, try using tree to identify these
+my_tree_no_pa <- my_tree %>%
+  filter(MSH %in% no_pa$MSH) %>% 
+  select(MSH, tree) %>% 
+  distinct()
+sum(!duplicated(my_tree_no_pa$MSH)) # all but 1 has tree, as expected
+
+## Detect tree lengths
+tree_pa_link <- tree %>%
+  inner_join(subst_code) %>% 
+  select(-descriptorui) %>% 
   distinct()
 
-tree_lkp <- srch4 %>% 
-  select(MSH,  descriptorui = descriptorui.y) %>% 
+## Identify where any of the trees match, bu trucating the trees in the
+## MESH databse to the trees I ahve in my dataset
+tree_lengths <- sort(nchar(my_tree_no_pa$tree) %>%  unique())
+tree_lengths_res <- map(tree_lengths, function (tree_length) {
+  tree_pa_link %>%
+    mutate(tree_link = substr(tree, 1, tree_length)) %>% 
+    filter(tree_link %in% my_tree_no_pa$tree) %>% 
+    distinct()
+})
+names(tree_lengths_res) <- paste0("len", tree_lengths)
+tree_lengths_res <- bind_rows(tree_lengths_res, .id = "tree_len")
+tree_lengths_res <- distinct(tree_lengths_res)
+
+my_pa_indirect_tree <- tree_lengths_res %>% 
+  inner_join(my_tree_no_pa, by = c("tree_link" = "tree")) %>% 
+  select(MSH, descriptorui_pharm_action540) %>% 
+  unique()
+sum(!duplicated(my_pa_indirect_tree$MSH)) # got an additional 25 with pharmacological actions
+
+my_pa_all <- bind_rows(my_pa_all, my_pa_indirect_tree)
+
+setdiff(my_terms$MSH, my_pa_all$MSH)
+no_pa <- my_terms %>% 
+  filter(!MSH %in% my_pa_all$MSH) %>% 
+  group_by(MSH) %>% 
+  summarise(str_srchd = paste(unique(str_to_lower(na.omit(str_srchd))), collapse = " | "))
+write_csv(no_pa, path = "Data/assign_manual_pharacologic_action.csv")
+
+## 16 items, manually assigned 7 pharmacological actions manually
+rvd_no_pa <- read_csv(file = "Data/assignED_manual_pharacologic_action.csv")
+rvd_no_pa <- rvd_no_pa %>% 
+  filter(!is.na(descriptorui)) %>% 
+  select(MSH, descriptorui) 
+rvd_no_pa2 <- str_split(rvd_no_pa$descriptorui, pattern = fixed("|"))
+names(rvd_no_pa2) <- rvd_no_pa$MSH 
+ 
+my_pa_manual <- rvd_no_pa2 %>% 
+  stack() %>% 
+  set_names(c("descriptorui", "MSH")) %>% 
+  inner_join(subst_code, by = "descriptorui") %>% 
+  select(-descriptorui) %>% 
   distinct()
+sum(!duplicated(my_pa_manual$MSH))
 
-## Identifies all ids, can now link this id
-## to any of the ids values in the other dataset
-all_ids <- srch4 %>%
-  select(-code_type) %>% 
-  gather(key = "code_type", value = "ui", - MSH, na.rm = TRUE) %>% 
-  select(-code_type) %>% 
-  distinct()
-all_ids <- all_ids %>% 
-  add_row(MSH = unique(all_ids$MSH), ui = unique(all_ids$MSH)) %>% 
-  distinct()
+## Combine all mesh pharmacalogical actions
+my_pa_all <- bind_rows(direct = my_pa_direct,
+                       indirect_c = my_pa_indirect_c,
+                       indirect_d = my_pa_indirect_d,
+                       indirect_tree = my_pa_indirect_tree,
+                       manual = my_pa_manual,
+                       .id = "link_to_pa") %>% 
+  select(MSH, link_to_pa, descriptorui_pharm_action540) %>% 
+  distinct(MSH, descriptorui_pharm_action540, .keep_all = TRUE)
+setdiff(my_terms$MSH, my_pa_all$MSH) # only 9 without MESh pharmacological action
 
-rm(srch, srch2, srch3, srch3b, srch4)
-rm(pharm_codes, pharm_lkp, pharm2, pharmcodeonly, scr, scr_noasterisk)
-
-
-## Trees
-tree <- all_ids %>% 
-  inner_join(pharm %>% 
-               select(descriptorui, tree) %>% 
-               distinct(),
-             by = c("ui" = "descriptorui")) %>% 
-  select(-ui) %>% 
-  distinct()
-
+saveRDS(my_tree, file = "Data/MSH_to_tree.Rds")
+saveRDS(my_pa_all, file = "Data/MSH_to_pharmacological_action.Rds")
+rm(list = ls())
+my_tree <- readRDS(file = "Data/MSH_to_tree.Rds")
+my_pa   <- readRDS(file = "Data/MSH_to_pharmacological_action.Rds")
