@@ -292,6 +292,9 @@ my_pa_all <- bind_rows(direct = my_pa_direct,
   distinct(MSH, descriptorui_pharm_action540, .keep_all = TRUE)
 setdiff(my_terms$MSH, my_pa_all$MSH) # only 9 without MESh pharmacological action
 
+my_pa_all <- my_pa_all %>%
+  inner_join(substance_description)
+
 saveRDS(my_tree, file = "Data/MSH_to_tree.Rds")
 saveRDS(my_pa_all, file = "Data/MSH_to_pharmacological_action.Rds")
 rm(list = ls())
