@@ -156,6 +156,13 @@ rm(p1, s1, ids, smrms)
 rm(a_tree, a_pharm, subst_dui, supp, ui, x)
 rm(substance)
 
+## Save tables
+saveRDS(scr, file= "Scratch_data/supplementaryconceptrecord.Rds")
+saveRDS(tree, file= "Scratch_data/mesh_tree_numbers.Rds")
+saveRDS(subst_code, file = "Scratch_data/substances_codes.Rds")
+saveRDS(substance_description, file = "Scratch_data/substances_text.Rds")
+
+
 ## Load terms required from rxnorm and eutils searching
 my_terms <- readRDS("../../Fellowship/Trial_identify/clinical_trials_august_2017/Data/Automatic_atc_rxnorm_mesh.Rds")
 my_terms <- my_terms %>%
